@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Drednot UI Debug</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 900px; margin: 20px auto; }
+    button { margin: 5px; }
+    #log { white-space: pre-wrap; background: #f0f0f0; padding: 10px; border: 1px solid #ccc; height: 260px; overflow-y: auto; }
+  </style>
+</head>
+<body>
+  <h1>Drednot UI + Debug</h1>
+  <p>Open the browser console for more details. If buttons are missing, ensure this file is loaded from server in <code>http://localhost:3000</code>.</p>
+
+  <label>Name: <input id="name" value="user1" /></label><br />
+  <label>Group code: <input id="code" /></label><br />
+
+  <button id="connect">Connect</button>
+  <button id="create" disabled>Create group</button>
+  <button id="join" disabled>Join group</button>
+  <button id="ping" disabled>Ping group</button>
+
+  <h2>Server Events</h2>
+  <div id="log"></div>
+
+  <script>
+    let ws;
+    const logElement = document.getElementById('log');
+
+    function log(msg) {
+      const ts = new Date().toISOString();
+      logElement.textContent += `[${ts}] ${msg}\n`;
+      logElement.scrollTop = logElement.scrollHeight;
+      console.log(msg);
+    }
+
+    function setButtons(connected) {
+      document.getElementById('create').disabled = !connected;
+      document.getElementById('join').disabled = !connected;
+      document.getElementById('ping').disabled = !connected;
+      document.getElementById('connect').disabled = connected;
+    }
+
+    document.getElementById('connect').addEventListener('click', () => {
+      ws = new WebSocket("wss://insurmountably-unsnuffed-urijah.ngrok-free.dev");
+      log('Attempting WebSocket connection...');
+
+      ws.addEventListener('open', () => {
+        log('WebSocket OPEN');
+        setButtons(true);
+      });
+
+      ws.addEventListener('message', e => {
+        log('Received: ' + e.data);
+      });
+
+      ws.addEventListener('close', () => {
+        log('WebSocket CLOSED');
+        setButtons(false);
+      });
+
+      ws.addEventListener('error', err => {
+        log('WebSocket ERROR: ' + err.message);
+      });
+    });
+
+    document.getElementById('create').addEventListener('click', () => {
+      const name = document.getElementById('name').value.trim();
+      if (!name) return alert('Enter name');
+      ws.send(JSON.stringify({ type: 'create', name }));
+      log('Sent create request: ' + name);
+    });
+
+    document.getElementById('join').addEventListener('click', () => {
+      const name = document.getElementById('name').value.trim();
+      const code = document.getElementById('code').value.trim();
+      if (!name || !code) return alert('Enter name and code');
+      ws.send(JSON.stringify({ type: 'join', name, code }));
+      log(`Sent join request: ${name} → ${code}`);
+    });
+
+    document.getElementById('ping').addEventListener('click', () => {
+      const name = document.getElementById('name').value.trim();
+      ws.send(JSON.stringify({ type: 'ping', message: 'ping', name }));
+      log('Sent ping');
+    });
+  </script>
+</body>
+</html>
