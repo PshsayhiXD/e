@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Drednot Team PRO v3 Personal
+// @name         Drednot Team PRO v3 Test
 // @namespace    https://example.com/drednot
 // @version      3.9
 // @description  Realtime group pings, minimap, team manager for Drednot
@@ -12,6 +12,71 @@
 
 (function() {
     'use strict';
+
+    // ─── GM_addStyle polyfill (runs fine in both Tampermonkey and Interstellar mod contexts) ───
+    if (typeof GM_addStyle === 'undefined') {
+        window.GM_addStyle = function(css) {
+            const style = document.createElement('style');
+            style.type = 'text/css';
+            style.textContent = css;
+            (document.head || document.documentElement).appendChild(style);
+        };
+    }
+
+    // ─── GM_notification polyfill ──────────────────────────────────────────────
+    if (typeof GM_notification === 'undefined') {
+        window.GM_notification = function({ title, text, timeout }) {
+            if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+                const n = new Notification(title || 'Drednot PRO', { body: text });
+                if (timeout) setTimeout(() => n.close(), timeout);
+            } else if (typeof Notification !== 'undefined' && Notification.permission !== 'denied') {
+                Notification.requestPermission().then(permission => {
+                    if (permission === 'granted') {
+                        const n = new Notification(title || 'Drednot PRO', { body: text });
+                        if (timeout) setTimeout(() => n.close(), timeout);
+                    } else {
+                        _showToast(`${title}: ${text}`, timeout || 1700);
+                    }
+                });
+            } else {
+                _showToast(`${title}: ${text}`, timeout || 1700);
+            }
+        };
+    }
+
+    // ─── GM_xmlhttpRequest polyfill ────────────────────────────────────────────
+    if (typeof GM_xmlhttpRequest === 'undefined') {
+        window.GM_xmlhttpRequest = function({ method, url, headers, data, onload, onerror }) {
+            const xhr = new XMLHttpRequest();
+            xhr.open(method || 'GET', url, true);
+            if (headers) {
+                Object.entries(headers).forEach(([k, v]) => {
+                    try { xhr.setRequestHeader(k, v); } catch(e) {}
+                });
+            }
+            xhr.onload  = () => { if (onload)  onload({ status: xhr.status, responseText: xhr.responseText }); };
+            xhr.onerror = (e) => { if (onerror) onerror(e); };
+            xhr.send(data || null);
+        };
+    }
+
+    // ─── Toast helper (fallback for GM_notification polyfill) ──────────────────
+    function _showToast(msg, duration) {
+        const toast = document.createElement('div');
+        toast.textContent = msg;
+        toast.style.cssText = [
+            'position:fixed', 'bottom:30px', 'left:50%', 'transform:translateX(-50%)',
+            'background:rgba(20,20,40,0.95)', 'color:#eee', 'padding:8px 18px',
+            'border-radius:8px', 'border:1px solid #3182ce', 'font-family:Arial,sans-serif',
+            'font-size:13px', 'z-index:2147483647', 'pointer-events:none',
+            'box-shadow:0 4px 16px rgba(0,0,0,0.6)', 'transition:opacity 0.4s'
+        ].join('!important;') + '!important';
+        document.body.appendChild(toast);
+        setTimeout(() => {
+            toast.style.setProperty('opacity', '0', 'important');
+            setTimeout(() => toast.remove(), 400);
+        }, duration || 1700);
+    }
 
     const BACKEND_URL = 'wss://insurmountably-unsnuffed-urijah.ngrok-free.dev';
     const WORLD = {w:1600,h:1600};
@@ -199,19 +264,6 @@
     }
 
     // ─── E2E Crypto ───────────────────────────────────────────────────────────
-    // Uses the Web Crypto API (SubtleCrypto) available natively in modern browsers.
-    //
-    // Security model:
-    //   password ──PBKDF2(salt="drednot-pro-auth:<code>")──► authToken  (sent to server for membership check)
-    //   password ──PBKDF2(salt="drednot-pro-enc:<code>") ──► encKey     (never leaves the client)
-    //
-    // Because the two PBKDF2 derivations use different salts, the server's stored
-    // authToken reveals nothing about encKey — the server host cannot decrypt positions.
-    //
-    // Each pos_update is encrypted with AES-GCM using a random 96-bit IV that is
-    // prepended to the ciphertext before base64 encoding, ensuring ciphertext
-    // uniqueness even when position hasn't changed.
-
     const _subtle = (() => {
         try { return (unsafeWindow || window).crypto.subtle; } catch(e) { return window.crypto.subtle; }
     })();
@@ -219,8 +271,6 @@
         try { return (unsafeWindow || window).crypto; } catch(e) { return window.crypto; }
     })();
 
-    // Derives both the authToken (for server) and encKey (for AES-GCM) from a
-    // password and group code.  Returns a Promise<{ authToken, encKey }>.
     async function cryptoDeriveKeys(password, groupCode) {
         const enc = new TextEncoder();
         const keyMaterial = await _subtle.importKey(
@@ -233,7 +283,6 @@
         const authSalt = enc.encode('drednot-pro-auth:' + groupCode);
         const encSalt  = enc.encode('drednot-pro-enc:'  + groupCode);
 
-        // Auth token derivation (sent to server — does NOT equal the enc key)
         const authBits = await _subtle.deriveBits(
             { name: 'PBKDF2', salt: authSalt, iterations: 100000, hash: 'SHA-256' },
             keyMaterial,
@@ -241,7 +290,6 @@
         );
         const authToken = btoa(String.fromCharCode(...new Uint8Array(authBits)));
 
-        // Encryption key derivation (stays client-side only)
         const encKey = await _subtle.deriveKey(
             { name: 'PBKDF2', salt: encSalt, iterations: 100000, hash: 'SHA-256' },
             keyMaterial,
@@ -253,8 +301,6 @@
         return { authToken, encKey };
     }
 
-    // Encrypts a plain JS object with the given CryptoKey (AES-GCM 256).
-    // Returns a base64 string of [12-byte IV | ciphertext].
     async function cryptoEncryptPos(encKey, plainData) {
         const enc = new TextEncoder();
         const iv = _cryptoObj.getRandomValues(new Uint8Array(12));
@@ -269,8 +315,6 @@
         return btoa(String.fromCharCode(...combined));
     }
 
-    // Decrypts a base64 string produced by cryptoEncryptPos.
-    // Returns the parsed plain object, or null on failure.
     async function cryptoDecryptPos(encKey, b64) {
         try {
             const combined = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
@@ -288,7 +332,6 @@
         }
     }
 
-    // Clears all in-memory crypto state (called on leave / disband / disconnect).
     function cryptoClear() {
         state.crypto.password      = null;
         state.crypto.encKey        = null;
@@ -297,7 +340,6 @@
         updatePasswordStatus();
     }
 
-    // Updates the small status badge inside the panel showing encryption state.
     function updatePasswordStatus() {
         const el = document.getElementById('password-status');
         if (!el) return;
@@ -348,7 +390,6 @@
                 left.style.cssText = 'flex:1;min-width:0;';
                 const codeSpan = document.createElement('div');
                 codeSpan.style.cssText = 'font-weight:bold;font-size:13px;color:#e2e8f0;letter-spacing:1px;';
-                // Show lock icon when group is password protected
                 codeSpan.textContent = saved.code + (info.hasPassword ? '  🔒' : '');
                 const statusSpan = document.createElement('div');
                 statusSpan.style.cssText = 'font-size:11px;margin-top:2px;';
@@ -370,8 +411,6 @@
                 const nameEl = document.getElementById('name-input');
                 const playerName = () => (nameEl && nameEl.value.trim()) || state.me.name || 'Player';
 
-                // ── Helper: prompt for password if group is protected, then join/recreate ──
-                // Returns a Promise that resolves to { authToken, encKey } or { authToken:null, encKey:null }.
                 async function resolvePasswordForGroup(code, hasPassword, actionLabel) {
                     if (!hasPassword) return { authToken: null, encKey: null };
                     const pw = prompt(
@@ -380,7 +419,7 @@
                     );
                     if (pw === null || pw.trim() === '') {
                         notify('Cancelled — password required for this group.');
-                        return null; // null signals "cancelled"
+                        return null;
                     }
                     try {
                         const keys = await cryptoDeriveKeys(pw.trim(), code);
@@ -401,14 +440,10 @@
                     actionBtn.onclick = async () => {
                         const name = playerName();
                         state.me.name = name; saveName(name);
-                        // Recreated groups are fresh — no authToken needed to create,
-                        // but if the user wants to add a password they can set one after.
-                        // If the old group had a password, the recreator sets it again via set_group_auth.
                         let authToken = null;
                         if (info.hasPassword) {
                             const result = await resolvePasswordForGroup(saved.code, true, 'recreate');
                             if (!result) return;
-                            // Store pending password so the set_group_auth is sent after 'joined'
                             state.crypto.pendingPassword = result.password;
                         }
                         wsSend({ type: 'recreate', name, code: saved.code, authToken });
@@ -424,7 +459,7 @@
                         const name = playerName();
                         state.me.name = name; saveName(name);
                         const result = await resolvePasswordForGroup(saved.code, info.hasPassword, 'join');
-                        if (result === null) return; // cancelled
+                        if (result === null) return;
                         if (result.encKey) {
                             state.crypto.encKey    = result.encKey;
                             state.crypto.authToken = result.authToken;
@@ -489,7 +524,6 @@
             title.textContent = '👥 Manage Members';
             menu.appendChild(title);
 
-            // Active members
             const activePlayers = Object.entries(state.players).filter(([pid]) => pid !== state.me.id);
 
             const activeLabel = document.createElement('div');
@@ -543,7 +577,6 @@
                 });
             }
 
-            // Banned players
             if (banList.length > 0) {
                 const banLabel = document.createElement('div');
                 banLabel.className = 'mm-section-label';
@@ -977,7 +1010,6 @@
             ctx.restore();
         }
 
-        // Only draw "me" dot if not stealth
         if (!state.me.isStealth) {
             const myPos = getPlayerPos();
             if (myPos) {
@@ -1033,14 +1065,12 @@
     }
 
     // ─── Discord webhook ──────────────────────────────────────────────────────
-    // async so we can await the invite link before sending
     async function sendEnemyPingWebhook(pos) {
         const webhook = state.currentWebhook;
         if (!webhook || !webhook.url) return;
         const zone = state.currentZone || 'Unknown Zone';
         const cell = getGridCell(pos.x, pos.y);
 
-        // ── Fetch in-game invite link ─────────────────────────────────────────
         let link = "can't send link";
         try {
             const sendBtn = document.getElementById("chat-send");
@@ -1049,7 +1079,6 @@
                 sendBtn.click();
                 chatInput.value = "/invite";
                 sendBtn.click();
-                // Wait a moment for the game to copy the link to the clipboard
                 await new Promise(res => setTimeout(res, 150));
                 if (navigator.clipboard && navigator.clipboard.readText) {
                     const clipboardText = await navigator.clipboard.readText();
@@ -1425,7 +1454,6 @@
             else { showSavedGroupsMenu(); }
         };
 
-        // Save name whenever it changes in the input
         const nameInput = document.getElementById('name-input');
         if (nameInput) {
             nameInput.addEventListener('input', () => { saveName(nameInput.value.trim()); });
@@ -1555,11 +1583,9 @@
             el('btn-leave').style.display  = inGroup ? 'block' : 'none';
             el('admin-box').style.display  = (state.me.isAdmin && inGroup) ? 'block' : 'none';
 
-            // Leader-only manage members button
             const leaderBox = el('leader-box');
             if (leaderBox) leaderBox.style.display = (state.me.isLeader && inGroup) ? 'block' : 'none';
 
-            // Hide/show password input — only useful when not in a group
             const pwInput = el('password-input');
             if (pwInput) pwInput.style.display = inGroup ? 'none' : '';
             updatePasswordStatus();
@@ -1601,7 +1627,6 @@
         const list = el('team-list');
         list.innerHTML = '';
 
-        // Only show "you" row if NOT stealth
         if (!state.me.isStealth) {
             const myHpData = getShipHp();
             const myDiv = document.createElement('div');
@@ -1706,7 +1731,6 @@
             const ni = document.getElementById('name-input');
             const name = (ni && ni.value.trim()) || state.me.name || 'Player' + Math.floor(Math.random() * 1000);
             state.me.name = name;
-            // NOTE: isStealth is NOT set here — the server determines it and sends it back in 'welcome'
             wsSend({type: 'hello', name});
         };
         state.ws.onclose = (e) => { log('WS closed', e.code, e.reason); setTimeout(connectWS, 1500); };
@@ -1721,8 +1745,6 @@
                 if (m.id === state.me.id) return;
 
                 if (m.enc) {
-                    // ── Encrypted position ──────────────────────────────────
-                    // Only decrypt if we have the key (i.e. we know the password).
                     if (state.crypto.encKey) {
                         cryptoDecryptPos(state.crypto.encKey, m.enc).then(plain => {
                             if (!plain) { state.dbg.posDropped++; return; }
@@ -1737,11 +1759,9 @@
                             state.dbg.posStored++;
                         });
                     } else {
-                        // We're in the group but don't have the key — drop silently
                         state.dbg.posDropped++;
                     }
                 } else {
-                    // ── Plaintext position ──────────────────────────────────
                     state.livePositions[m.id] = {
                         name: m.name || m.id, x: m.x, y: m.y, zone: m.zone || null,
                         hp:    typeof m.hp    === 'number' ? m.hp    : null,
@@ -1757,7 +1777,6 @@
                 state.me.name    = m.name;
                 state.me.group   = m.group;
                 state.me.isAdmin = m.isAdmin;
-                // isStealth is set from the server response — cannot be faked client-side
                 state.me.isStealth = m.isStealth || false;
                 const ni = document.getElementById('name-input');
                 if (ni) ni.value = state.me.name;
@@ -1775,10 +1794,6 @@
                 setGroupUI();
                 updatePlayerList();
 
-                // ── Post-join crypto setup ──────────────────────────────────
-                // For created groups: we stored a pendingPassword before the
-                // server-assigned code was known.  Now that we have the code,
-                // derive both keys and register the authToken with the server.
                 if (state.crypto.pendingPassword) {
                     const pw   = state.crypto.pendingPassword;
                     const code = m.code;
@@ -1829,13 +1844,8 @@
                 updatePlayerList();
             }
 
-            // ── Group auth / encryption status changed ──────────────────────
-            // Sent by the server when the leader calls set_group_auth or when
-            // the group code is changed (which resets authToken to null).
             if (m.type === 'group_auth_status') {
                 if (!m.protected) {
-                    // Password protection was removed — clear our local crypto state
-                    // only if we are not the leader (the leader set it and still has the key)
                     if (!state.me.isLeader) {
                         cryptoClear();
                         notify('🔓 Group password protection was removed');
@@ -1844,7 +1854,6 @@
                 setGroupUI();
             }
 
-            // Confirmation that our set_group_auth was accepted
             if (m.type === 'auth_set') {
                 log('Server confirmed auth token for group', m.code, '| protected:', m.protected);
             }
@@ -1909,8 +1918,6 @@
     }
 
     // ─── Group actions ────────────────────────────────────────────────────────
-    // createGroup is async because if a password is provided, key derivation
-    // happens inside the 'joined' handler (we don't have the code yet here).
     async function createGroup() {
         const name = document.getElementById('name-input').value.trim();
         if (!name) { alert('Name required'); return; }
@@ -1919,8 +1926,6 @@
         const pwEl = document.getElementById('password-input');
         const password = pwEl ? pwEl.value.trim() : '';
         if (password) {
-            // Stash password — keys will be derived in the 'joined' handler
-            // once the server-assigned group code is known.
             state.crypto.pendingPassword = password;
             log('Password set — will derive keys after receiving group code');
         } else {
@@ -1928,11 +1933,9 @@
             cryptoClear();
         }
 
-        // isStealth will be confirmed by the server after the hello/join handshake
         wsSend({type: 'create', name});
     }
 
-    // joinGroup is async because key derivation (PBKDF2) is an async operation.
     async function joinGroup() {
         const name = document.getElementById('name-input').value.trim();
         const code = document.getElementById('code-input').value.trim().toUpperCase();
@@ -1947,8 +1950,6 @@
             try {
                 const keys = await cryptoDeriveKeys(password, code);
                 authToken = keys.authToken;
-                // Pre-store keys — they will be used immediately when the first
-                // pos_update arrives after 'joined'.
                 state.crypto.encKey    = keys.encKey;
                 state.crypto.authToken = keys.authToken;
                 state.crypto.password  = password;
@@ -1962,16 +1963,12 @@
             cryptoClear();
         }
 
-        // isStealth will be confirmed by the server after the hello/join handshake
         wsSend({type: 'join', name, code, authToken});
     }
 
     function leaveGroup()   { wsSend({type: 'leave'}); }
     function disbandGroup() { if (!confirm('Disband the group for everyone?')) return; wsSend({type: 'disband'}); }
 
-    // changeCode re-derives and re-registers the auth token because PBKDF2 uses
-    // the group code as part of the salt — changing the code invalidates the old
-    // derived keys.  The server also resets authToken to null on change_code.
     function changeCode() {
         const code = prompt('New group code (6 char):');
         if (!code) return;
@@ -1983,7 +1980,6 @@
             cryptoDeriveKeys(pw, newCode).then(keys => {
                 state.crypto.encKey    = keys.encKey;
                 state.crypto.authToken = keys.authToken;
-                // Re-register new auth token with server under new code
                 wsSend({ type: 'set_group_auth', authToken: keys.authToken });
                 log('🔒 Re-derived keys for new code', newCode);
                 notify('🔒 Encryption keys updated for new code');
@@ -1991,7 +1987,6 @@
         }
     }
 
-    // Fixed setStatus: only sets status text, does NOT copy it into ship field
     function setStatus(text) {
         state.me.status = text ? text.trim() : 'Ready';
         wsSend({type: 'status', status: state.me.status, ship: ''});
@@ -2024,7 +2019,7 @@
         updatePlayerList();
         const sound = new Audio('https://assets.mixkit.co/sfx/preview/mixkit-fast-game-notification-946.wav');
         sound.volume = 0.5; sound.play().catch(() => {});
-        sendEnemyPingWebhook(pos); // async — runs in background
+        sendEnemyPingWebhook(pos);
     }
 
     function addPing(p) { state.pings.push(Object.assign({ts: now(), alpha: 1}, p)); }
@@ -2042,10 +2037,10 @@
         });
     }
 
-    // ─── Live position broadcast (async — encrypts if encKey is set) ──────────
+    // ─── Live position broadcast ──────────────────────────────────────────────
     async function sendLivePosition() {
         if (!state.me.group || !state.me.id) return;
-        if (state.me.isStealth) return;  // Stealth users don't broadcast position
+        if (state.me.isStealth) return;
         const pos = getPlayerPos();
         if (!pos || typeof pos.x !== 'number' || typeof pos.y !== 'number') return;
         const root = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
@@ -2059,9 +2054,6 @@
         if (!state.ws || state.ws.readyState !== 1) return;
 
         if (state.crypto.encKey) {
-            // ── Encrypted path ──────────────────────────────────────────────
-            // Pack all position fields into a single JSON blob and AES-GCM encrypt it.
-            // The server will see only the opaque 'enc' string — no x/y/zone/hp.
             try {
                 const plainData = {
                     x: pos.x, y: pos.y, zone,
@@ -2075,7 +2067,6 @@
                 log('Encryption error in sendLivePosition:', e);
             }
         } else {
-            // ── Plaintext path (no password set) ───────────────────────────
             state.ws.send(JSON.stringify({
                 type: 'pos_update', x: pos.x, y: pos.y, zone,
                 hp:    ship ? ship.health     : null,
@@ -2191,13 +2182,11 @@
         createUI();
         updatePingButtonLabels();
 
-        // Restore saved name into the input field
         const savedName = loadName();
         if (savedName) {
             const nameInput = document.getElementById('name-input');
             if (nameInput) nameInput.value = savedName;
             state.me.name = savedName;
-            // NOTE: isStealth is NOT set here — server confirms it via 'welcome' after 'hello'
         }
 
         const panel = document.getElementById('drednot-pro-panel');
@@ -2206,7 +2195,6 @@
         const tab = document.getElementById('drednot-show-tab');
         if (tab) tab.style.setProperty('display', 'block', 'important');
 
-        // Apply the loaded minimap position to the canvas
         const canvas = getOrCreateMinimapCanvas();
         canvas.style.setProperty('left', MINIMAP.x0 + 'px', 'important');
         canvas.style.setProperty('top',  MINIMAP.y0 + 'px', 'important');
@@ -2224,3 +2212,18 @@
 
     waitForInterstellar(startScript);
 })();
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+const InterstellarScriptingMod = __importDefault(require("@interstellar/InterstellarScriptingMod"));
+class MinimapVisualizer extends InterstellarScriptingMod.default {
+
+    preload() {
+        // call your start function here
+    }
+
+    load() {
+
+    }
+}exports.default = MinimapVisualizer;
