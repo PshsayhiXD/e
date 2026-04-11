@@ -1,13 +1,13 @@
 // ==UserScript==
-// @name         Drednot Team PRO v3 Test
-// @namespace    https://example.com/drednot
-// @version      3.9
+// @name         Drednot Team PRO v4
+// @namespace    https://drednot.io/
+// @version      4.0
 // @description  Realtime group pings, minimap, team manager for Drednot
 // @grant        GM_addStyle
 // @grant        GM_notification
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
-// @match        *https://drednot.io*
+// @match        *https://drednot.io/*
 // ==/UserScript==
 
 (function() {
@@ -82,6 +82,10 @@
     const WORLD = {w:1600,h:1600};
     const MINIMAP = {x0:800,y0:525,x1:950,y1:675};
     const MINIMAP_CANVAS_ID = 'drednot-pro-minimap-canvas';
+    // ─── CHANGE 1: The Pits zone constants ────────────────────────────────────
+    const PITS_MINIMAP = {x0:1450, y0:630, x1:1570, y1:675};
+    const PITS_MINIMAP_CANVAS_ID = 'drednot-pro-pits-minimap-canvas';
+    // ─────────────────────────────────────────────────────────────────────────
     const PING_FADE_MS = 6000;
     const COOLDOWNS = {punch:2000,dmg:5000,lowhp:15000};
     const ADMIN_EMOJI = '🛡️';
@@ -936,6 +940,15 @@
             font-size:11px !important;font-weight:bold !important;text-align:center !important;
             text-shadow:0 1px 3px rgba(0,0,0,0.9) !important;display:none;
         }
+
+        /* ── CHANGE 4: The Pits minimap canvas ───────────────── */
+        #drednot-pro-pits-minimap-canvas {
+            position:fixed !important;
+            left:${PITS_MINIMAP.x0}px !important;top:${PITS_MINIMAP.y0}px !important;
+            z-index:2147483646 !important;pointer-events:none !important;
+            border:1px solid rgba(192,132,252,0.65) !important;
+            background:rgba(0,0,0,0.22) !important;
+        }
         `);
     }
 
@@ -1030,10 +1043,13 @@
             if (typeof p.x !== 'number' || typeof p.y !== 'number') return;
             const mp = toLocalXY(p, width, height);
             ctx.save();
+            // ─── CHANGE 3: Added The Pits zone colour ─────────────────────
             let color = '#00ff00';
-            if (p.zone === 'Raven')         color = '#3b82f6';
-            else if (p.zone === 'Falcon')   color = '#ff8c00';
-            else if (p.zone === 'Freeport') color = '#00ff00';
+            if (p.zone === 'Raven')           color = '#3b82f6';
+            else if (p.zone === 'Falcon')     color = '#ff8c00';
+            else if (p.zone === 'Freeport')   color = '#00ff00';
+            else if (p.zone === 'The Pits')   color = '#873e23';
+            // ──────────────────────────────────────────────────────────────
             ctx.fillStyle = color;
             ctx.strokeStyle = 'rgba(0,0,0,0.7)';
             ctx.lineWidth = 1.5;
@@ -1229,6 +1245,19 @@
                     canvas.style.setProperty('pointer-events', 'auto', 'important');
                 }
             }
+            // ─── CHANGE 7: Enforce Pits canvas visibility ─────────────────
+            const pitsCanvas = document.getElementById(PITS_MINIMAP_CANVAS_ID);
+            if (pitsCanvas) {
+                pitsCanvas.style.setProperty('z-index', '2147483646', 'important');
+                pitsCanvas.style.setProperty('pointer-events', 'none', 'important');
+                if (state.minimapVisible && state.currentZone === 'The Pits') {
+                    pitsCanvas.style.setProperty('display', 'block', 'important');
+                    pitsCanvas.style.setProperty('visibility', 'visible', 'important');
+                } else {
+                    pitsCanvas.style.setProperty('display', 'none', 'important');
+                }
+            }
+            // ──────────────────────────────────────────────────────────────
             if (!tab && state.uiHidden && !state.uiClosed) {
                 createShowTab();
                 document.getElementById('drednot-show-tab').style.setProperty('display','block','important');
@@ -1364,6 +1393,72 @@
             notify(`Minimap locked at (${newLeft}, ${newTop})`);
         }
     }
+
+    // ─── CHANGE 5: The Pits canvas + renderer ────────────────────────────────
+    function getOrCreatePitsCanvas() {
+        let c = document.getElementById(PITS_MINIMAP_CANVAS_ID);
+        if (!c) {
+            c = document.createElement('canvas');
+            c.id = PITS_MINIMAP_CANVAS_ID;
+            c.width  = PITS_MINIMAP.x1 - PITS_MINIMAP.x0; // 120
+            c.height = PITS_MINIMAP.y1 - PITS_MINIMAP.y0; // 45
+            c.style.cssText = [
+                'position:fixed',
+                `left:${PITS_MINIMAP.x0}px`,
+                `top:${PITS_MINIMAP.y0}px`,
+                'z-index:2147483646',
+                'pointer-events:none',
+                'border:1px solid rgba(192,132,252,0.65)',
+                'background:rgba(0,0,0,0.22)',
+                'display:none'
+            ].join('!important;') + '!important';
+            document.body.appendChild(c);
+            log('Pits minimap canvas created');
+        } else if (c.parentNode !== document.body) {
+            document.body.appendChild(c);
+        }
+        return c;
+    }
+
+    function renderPitsMinimap() {
+        const inPits = state.currentZone === 'The Pits';
+        const c = inPits ? getOrCreatePitsCanvas() : document.getElementById(PITS_MINIMAP_CANVAS_ID);
+        if (!c) return;
+
+        if (!state.minimapVisible || !inPits) {
+            c.style.setProperty('display', 'none', 'important');
+            return;
+        }
+
+        c.style.setProperty('display', 'block', 'important');
+        c.style.setProperty('visibility', 'visible', 'important');
+        c.style.setProperty('z-index', '2147483646', 'important');
+
+        const ctx = c.getContext('2d');
+        ctx.clearRect(0, 0, c.width, c.height);
+
+        // Proportional grid lines (3 cols, 2 rows for 970×410 aspect)
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+        ctx.lineWidth = 0.6;
+        for (let i = 1; i < 3; i++) {
+            ctx.beginPath(); ctx.moveTo(i * c.width / 3, 0); ctx.lineTo(i * c.width / 3, c.height); ctx.stroke();
+        }
+        ctx.beginPath(); ctx.moveTo(0, c.height / 2); ctx.lineTo(c.width, c.height / 2); ctx.stroke();
+        ctx.restore();
+
+        // Zone label
+        ctx.save();
+        ctx.fillStyle = 'rgba(192,132,252,0.6)';
+        ctx.font = 'bold 7px Arial';
+        ctx.textAlign = 'left';
+        ctx.fillText('THE PITS', 3, 8);
+        ctx.restore();
+
+        // Shared renderer — uses current WORLD.w/h which is 970×410 in this zone
+        renderMinimapToCtx(ctx, c.width, c.height, false);
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     // ─── Coordinate helper ────────────────────────────────────────────────────
     function toMapXY(pos) {
@@ -1716,9 +1811,12 @@
         const zone = api.Game.getCurrentZone();
         if (!zone) return;
         state.currentZone = zone;
-        if (zone === 'Raven')         { WORLD.w = 1600; WORLD.h = 1600; }
-        else if (zone === 'Falcon')   { WORLD.w = 3600; WORLD.h = 3600; }
-        else if (zone === 'Freeport') { WORLD.w = 1200; WORLD.h = 1200; }
+        // ─── CHANGE 2: Added The Pits world dimensions ────────────────────
+        if (zone === 'Raven')           { WORLD.w = 1600; WORLD.h = 1600; }
+        else if (zone === 'Falcon')     { WORLD.w = 3600; WORLD.h = 3600; }
+        else if (zone === 'Freeport')   { WORLD.w = 1200; WORLD.h = 1200; }
+        else if (zone === 'The Pits')   { WORLD.w = 970;  WORLD.h = 410;  }
+        // ─────────────────────────────────────────────────────────────────
     }
 
     // ─── WebSocket ────────────────────────────────────────────────────────────
@@ -2107,6 +2205,10 @@
         Object.keys(state.livePositions).forEach(pid => {
             if (now() - state.livePositions[pid].ts > staleMs) delete state.livePositions[pid];
         });
+
+        // ─── CHANGE 6: Render Pits minimap alongside main minimap ─────────
+        renderPitsMinimap();
+        // ──────────────────────────────────────────────────────────────────
     }
 
     // ─── Low HP check ─────────────────────────────────────────────────────────
