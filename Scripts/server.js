@@ -1,4 +1,4 @@
-﻿const http = require('http');
+const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const WebSocket = require('ws');
@@ -162,7 +162,6 @@ function makePlayerMap(group) {
   for (const uid of group.members) {
     const u = users[uid];
     if (!u) continue;
-    if (u.isStealth) continue;
     p[uid] = {
       id: u.id,
       name: u.name,
@@ -277,14 +276,13 @@ wss.on('connection', (ws, req) => {
     name: 'Player' + id,
     group: null,
     isAdmin: false,
-    isStealth: false,
     status: 'Ready',
     ship: 'Unknown',
     lastShip: null,
     lastZone: null,
   };
 
-  ws.send(JSON.stringify({ type: 'welcome', id, name: users[id].name, group: null, isAdmin: false, isStealth: false }));
+  ws.send(JSON.stringify({ type: 'welcome', id, name: users[id].name, group: null, isAdmin: false}));
 
   ws.on('message', msg => {
     dbg('RAW MESSAGE:', msg.toString());
@@ -309,18 +307,10 @@ wss.on('connection', (ws, req) => {
 
       if (data.name && data.name.trim()) {
         user.name = data.name.trim();
-        // Stealth detection is server-side only — client cannot spoof this
-        if (user.name === 'ArckDev' || user.name === 'XendyOS') {
-          user.isStealth = true;
-          user.isAdmin = true;
-        } else {
-          user.isStealth = false;
-        }
       }
 
-      dbg('HELLO from', id, 'name:', user.name, 'stealth:', user.isStealth);
-      // ── isStealth is included so the client knows its own stealth status ──
-      ws.send(JSON.stringify({ type: 'welcome', id, name: user.name, group: user.group, isAdmin: user.isAdmin, isStealth: user.isStealth }));
+      dbg('HELLO from', id, 'name:', user.name);
+      ws.send(JSON.stringify({ type: 'welcome', id, name: user.name, group: user.group, isAdmin: user.isAdmin }));
       return;
     }
 
@@ -463,9 +453,7 @@ wss.on('connection', (ws, req) => {
       }
 
       // ── Password check ──────────────────────────────────────────────────
-      // Stealth dev accounts bypass the auth check entirely.
-      const isStealth = (data.name === 'ArckDev' || data.name === 'XendyOS');
-      if (group.authToken && !isStealth) {
+      if (group.authToken) {
         if (!data.authToken || data.authToken !== group.authToken) {
           ws.send(JSON.stringify({ type: 'error', message: 'incorrect group password' }));
           dbg('Join rejected for', data.name, '— wrong authToken');
@@ -476,13 +464,7 @@ wss.on('connection', (ws, req) => {
       user.name = data.name;
       user.group = data.code;
 
-      // Stealth dev accounts always get leadership
-      if (user.name === 'ArckDev' || user.name === 'XendyOS') {
-        user.isStealth = true;
-        group.leader = id;
-        group.admins.add(id);
-        user.isAdmin = true;
-      } else if (user.name === group.originalLeaderName) {
+      if (user.name === group.originalLeaderName) {
         // ── Restore original leader ──────────────────────────────────────
         // If there's a temporary leader in place, they stay as admin
         // but original leader reclaims the leader role.
@@ -531,8 +513,7 @@ wss.on('connection', (ws, req) => {
         const group = groups[code];
 
         // ── Password check on recreate-as-join ──────────────────────────
-        const isStealth = (user.name === 'ArckDev' || user.name === 'XendyOS' || user.name === 'BarryDev');
-        if (group.authToken && !isStealth) {
+        if (group.authToken) {
           if (!data.authToken || data.authToken !== group.authToken) {
             ws.send(JSON.stringify({ type: 'error', message: 'incorrect group password' }));
             dbg('Recreate-join rejected for', user.name, '— wrong authToken');
@@ -542,12 +523,7 @@ wss.on('connection', (ws, req) => {
 
         user.group = code;
 
-        if (user.name === 'ArckDev' || user.name === 'BarryDev') {
-          user.isStealth = true;
-          group.leader = id;
-          group.admins.add(id);
-          user.isAdmin = true;
-        } else if (user.name === group.originalLeaderName) {
+        if (user.name === group.originalLeaderName) {
           group.leader = id;
           group.admins.add(id);
           user.isAdmin = true;
@@ -758,7 +734,7 @@ wss.on('connection', (ws, req) => {
 
     // ── ping ───────────────────────────────────────────────────────────────
     if (data.type === 'ping') {
-      if (user.isStealth) return;
+       
       if (!user.group || !groups[user.group]) {
         ws.send(JSON.stringify({ type: 'error', message: 'not in group' }));
         return;
@@ -780,7 +756,6 @@ wss.on('connection', (ws, req) => {
 
     // ── pos_update ─────────────────────────────────────────────────────────
     if (data.type === 'pos_update') {
-      if (user.isStealth) return;
       if (!user.group || !groups[user.group]) return;
 
       const group = groups[user.group];
