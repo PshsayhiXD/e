@@ -2312,7 +2312,7 @@ const currentVer = "4.0";
         startMutationObserver();
         mainLoop();
         
-        fetch("https://raw.githubusercontent.com/PshsayhiXD/e/main/VERSION")
+        fetch("https://raw.githubusercontent.com/ArckA-glich/Drednot_mini-map/main/VERSION")
           .then(r => r.text())
           .then(v => {
             if(v.trim() !== currentVer) notify("New update available! :", v);
