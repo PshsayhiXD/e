@@ -9,6 +9,7 @@
 // @grant        unsafeWindow
 // @match        *https://drednot.io/*
 // ==/UserScript==
+const currentVer = "4.0";
 
 (function() {
     'use strict';
@@ -2310,6 +2311,12 @@
         startEnforceLoop();
         startMutationObserver();
         mainLoop();
+        
+        fetch("https://raw.githubusercontent.com/ArckA-glich/Drednot_mini-map/main/VERSION")
+          .then(r => r.text())
+          .then(v => {
+            if(v.trim() !== currentVer) notify("New update available! :", v);
+          });
     }
 
     waitForInterstellar(startScript);
